@@ -6,9 +6,10 @@ const changeCase = require('change-case');
 const fs = require('fs');
 const path = require('path');
 const { promisify } = require('util');
-const fsStat = promisify(fs.stat);
+const fsAccess = promisify(fs.access);
 const fsMkDir = promisify(fs.mkdir);
 const fsWriteFile = promisify(fs.writeFile);
+const fsReadDir = promisify(fs.readdir);
 
 const folders = {
   page: path.join(__dirname, 'src/pages'),
@@ -70,10 +71,13 @@ class makeBlock {
 
   async directoryOrFileExist(blockPath, blockName) {
     try {
-      await fsStat(blockPath)
+      const access = await fsAccess(blockPath, fs.constants.W_OK);
       throw `Error >>> Данный файл или директория уже существует ${blockName || blockPath}`
     } catch (err) {
-      return true;
+      if (err instanceof Error && err.code === 'ENOENT') {
+        return true;
+      }
+      throw err;
     }
   }
 
@@ -82,25 +86,47 @@ class makeBlock {
       await fsMkDir(dirPath)
       return true;
     } catch (err) {
-      throw `Error >>> Данный файл уже существует ${dirPath}`
+      throw `Error >>> Данная папка уже существует ${dirPath}`
     }
   }
 
   async createFiles(blockPath, blockName) {
     const files = [];
 
-    Object.keys(fileSources).forEach(ext => {
+
+    for (let ext in fileSources) {
       const fileSource = fileSources[ext](blockName);
       const filename = `${blockName}.${ext}`;
       const filePath = path.join(blockPath, filename);
 
+      try {
+        await this.directoryOrFileExist(filePath);
+      } catch (err) {
+        throw `Error >>> Данный файл уже существует ${filePath}`
+      }
+      
       files.push(fsWriteFile(filePath, fileSource, 'utf-8'))
-    })
+    }
 
+    return await Promise.all(files);
+  }
+
+  async getFiles (blockPath, blockName) {
     try {
-      return await Promise.all(files);
+      const files = await fsReadDir(blockPath)
+      const file = files.filter(file => file.includes(blockName));
+
+      console.log('\n')
+      console.log(`Блок ${blockName} создан`)
+      console.log('-'.repeat(48));
+      file.forEach(name => {
+        console.log(name);
+      })
+      console.log('#'.repeat(48));
+
+      return true
     } catch (err) {
-      console.error(`Error >>> Данный файл уже существует`);
+      console.error(err);
       throw err;
     }
   }
@@ -115,7 +141,15 @@ class makeBlock {
       await this.directoryOrFileExist(blockPath)
       await this.createDir(blockPath)
     }
-    await this.createFiles(blockPath, blockName)
+    try {
+      await this.createFiles(blockPath, blockName)
+    } catch (err) {
+      console.log(err);
+      return false;
+    }
+    await this.getFiles(blockPath, blockName);
+
+    return true;
   }
 
   create() {
